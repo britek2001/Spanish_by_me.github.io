@@ -17,6 +17,7 @@ html { scroll-behavior: smooth; scroll-padding-top: 5rem; }
 
 body {
   margin: 0;
+  font-variation-settings: "opsz" 8;
   background: var(--white);
   color: var(--black);
   font-family: var(--text);
