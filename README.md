@@ -41,3 +41,7 @@ The programme table and calendar update automatically. Also update the dates wri
 
 - Add the price if you want it shown (a line in the "Informations pratiques" list).
 - Check the room at Campus 1 and the start date.
+
+## If the form fails
+
+The page now shows the exact reason under the button (with a "Détails techniques" block students can send you). Typical causes: form not activated yet, ad blocker or school network blocking formsubmit.co, or the page opened as a local file instead of the live address.

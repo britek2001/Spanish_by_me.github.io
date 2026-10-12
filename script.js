@@ -168,11 +168,18 @@
 
   /* ------------------------------------------------------------------
      Formulaire : envoi par e-mail via FormSubmit (AJAX)
+     Si l'envoi échoue, la raison exacte est affichée dans la page.
      ------------------------------------------------------------------ */
   var form = document.getElementById('signup');
   if (!form) return;
   var status = document.getElementById('form-status');
   var button = document.getElementById('submit-btn');
+
+  function esc(t) {
+    return String(t).replace(/[&<>"]/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+    });
+  }
 
   function collect() {
     var data = {};
@@ -187,6 +194,7 @@
   function show(type, html) {
     status.innerHTML = '<div class="msg ' + type + '">' + html + '</div>';
     status.focus();
+    if (status.scrollIntoView) status.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
 
   function mailtoLink(data) {
@@ -196,6 +204,45 @@
     return 'mailto:' + FALLBACK_EMAIL +
       '?subject=' + encodeURIComponent('Inscription au cours d\'espagnol') +
       '&body=' + encodeURIComponent(lines.join('\n'));
+  }
+
+  /* Transforme une erreur technique en explication claire + piste de solution */
+  function explain(info) {
+    var m = (info.message || '').toLowerCase();
+    if (location.protocol === 'file:') {
+      return 'La page est ouverte depuis un fichier de l\'ordinateur. Ouvrez plutôt l\'adresse du site en ligne (https://…github.io/…).';
+    }
+    if (/activat/.test(m)) {
+      return 'Le formulaire n\'est pas encore activé. Le professeur doit cliquer sur le lien d\'activation reçu par e-mail de FormSubmit (vérifier aussi les spams).';
+    }
+    if (info.network) {
+      return 'La connexion à FormSubmit a été bloquée ou a échoué. Causes possibles : pas d\'Internet, bloqueur de publicités, réseau de l\'école ou de l\'entreprise, navigation privée stricte. Essayez avec un autre navigateur ou en 4G/5G.';
+    }
+    if (info.status === 429) return 'Trop de tentatives en peu de temps. Attendez quelques minutes puis réessayez.';
+    if (info.status >= 500) return 'Le service FormSubmit a un problème temporaire. Réessayez plus tard.';
+    return 'Réponse inattendue du service d\'envoi.';
+  }
+
+  function showError(info, data) {
+    console.error('Erreur formulaire :', info);
+    var tech = [
+      'Adresse de la page : ' + location.href,
+      'Statut HTTP : ' + (info.status || 'aucun (pas de réponse)'),
+      'Message : ' + (info.message || 'aucun'),
+      'Date : ' + new Date().toISOString()
+    ].join('\n');
+    show('err',
+      '<p><strong>L\'envoi a échoué.</strong></p>' +
+      '<p>' + esc(explain(info)) + '</p>' +
+      '<p>Vous pouvez aussi <a href="' + mailtoLink(data) + '">envoyer vos réponses depuis votre messagerie</a>.</p>' +
+      '<details><summary>Détails techniques (à envoyer au professeur)</summary>' +
+      '<pre style="white-space:pre-wrap;word-break:break-word;margin:0.6rem 0 0;font-size:0.85rem">' + esc(tech) + '</pre></details>');
+  }
+
+  /* Avertissement dès le chargement si la page est ouverte hors ligne (file://) */
+  if (location.protocol === 'file:') {
+    status.innerHTML = '<div class="msg err"><p><strong>Attention :</strong> cette page est ouverte depuis un fichier. ' +
+      'Le formulaire ne fonctionnera que sur le site en ligne.</p></div>';
   }
 
   form.addEventListener('submit', function (e) {
@@ -209,38 +256,47 @@
     button.textContent = 'Envoi en cours';
     status.innerHTML = '';
 
+    var httpStatus = 0;
     fetch(FORM_ENDPOINT, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
       body: JSON.stringify(data)
     })
       .then(function (r) {
-        return r.json().then(function (j) { return { ok: r.ok, json: j }; })
-          .catch(function () { return { ok: false, json: { message: 'HTTP ' + r.status } }; });
+        httpStatus = r.status;
+        return r.json().then(
+          function (j) { return { ok: r.ok, json: j }; },
+          function () { return { ok: false, json: { message: 'Réponse illisible (HTTP ' + r.status + ')' } }; }
+        );
       })
       .then(function (res) {
         var success = res.ok && (res.json.success === true || res.json.success === 'true');
-        if (!success) throw new Error(res.json && res.json.message ? res.json.message : 'Réponse inattendue');
+        if (!success) {
+          var err = new Error(res.json && res.json.message ? res.json.message : 'Réponse inattendue');
+          err.status = httpStatus;
+          throw err;
+        }
         form.reset();
         show('ok', '<p><strong>Merci, votre inscription est envoyée.</strong></p>' +
           '<p>Vous recevrez une réponse par e-mail pour confirmer votre groupe et votre place.</p>');
       })
       .catch(function (err) {
-        console.error('Erreur FormSubmit :', err);
-        var reason = err && err.message ? err.message : '';
-        var detail = /activat/i.test(reason)
-          ? 'Le formulaire n\'est pas encore activé côté professeur.'
-          : (/failed to fetch|networkerror|load failed/i.test(reason)
-              ? 'Le navigateur a bloqué la connexion (bloqueur de publicités, mode privé strict ou pas d\'Internet).'
-              : reason);
-        show('err', '<p><strong>L\'envoi a échoué.</strong></p>' +
-          (detail ? '<p>Raison : ' + detail + '</p>' : '') +
-          '<p>Réessayez, ou <a href="' + mailtoLink(data) +
-          '">envoyez vos réponses depuis votre messagerie</a>.</p>');
+        showError({
+          status: err && err.status ? err.status : httpStatus,
+          message: err && err.message ? err.message : String(err),
+          network: !httpStatus
+        }, data);
       })
       .then(function () {
         button.disabled = false;
         button.textContent = original;
       });
+  });
+
+  /* Si une erreur JavaScript survient ailleurs, l'afficher aussi dans la page */
+  window.addEventListener('error', function (ev) {
+    if (!status || status.innerHTML) return;
+    show('err', '<p><strong>Une erreur est survenue sur la page.</strong></p>' +
+      '<p><code>' + esc(ev.message || 'Erreur inconnue') + '</code></p>');
   });
 })();
